@@ -179,3 +179,8 @@ async def generate_lesson_plan(request: LessonPlanRequest):
 
     ktp_content = openai_response.json()['choices'][0]['message']['content']
     return {"lesson_plan": ktp_content, "references": references, "detailed_descriptions": detailed_descriptions}
+
+if __name__ == "__main__":
+    import uvicorn
+    port = int(os.environ.get("PORT", 8000))
+    uvicorn.run(app, host="0.0.0.0", port=port)
