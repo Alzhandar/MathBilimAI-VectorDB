@@ -10,3 +10,4 @@ faiss-cpu
 requests
 langchain-openai
 pypdf
+python-multipart
