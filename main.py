@@ -6,7 +6,7 @@ from pydantic import BaseModel
 from dotenv import load_dotenv
 import faiss
 import numpy as np
-from langchain_community.embeddings import OpenAIEmbeddings
+from langchain_openai import OpenAIEmbeddings
 from langchain_community.document_loaders import PyPDFLoader
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 import requests
@@ -36,11 +36,8 @@ class QueryRequest(BaseModel):
 class BookResponse(BaseModel):
     titles: list
 
-class LessonPlanRequest(BaseModel):
-    topic: str
-    subtopic: str
-    session1Duration: int
-    session2Duration: int
+class CourseRequest(BaseModel):
+    topics: list
 
 @app.post("/query_books")
 async def query_books(request: QueryRequest):
@@ -107,14 +104,9 @@ async def list_books():
     titles = list(set([doc.get("title", "Unknown") for doc in documents]))
     return {"titles": titles}
 
-@app.post("/generate_lesson_plan")
-async def generate_lesson_plan(request: LessonPlanRequest):
-    topic = request.topic
-    subtopic = request.subtopic
-    session1_duration = request.session1Duration
-    session2_duration = request.session2Duration
-
-    query = f"{topic} {subtopic}"
+@app.post("/create_course")
+async def create_course(request: CourseRequest):
+    topics = request.topics
     embeddings = OpenAIEmbeddings(api_key=os.getenv("OPENAI_API_KEY"))
 
     documents = list(MONGODB_COLLECTION.find({}))
@@ -123,7 +115,6 @@ async def generate_lesson_plan(request: LessonPlanRequest):
 
     texts = [doc["text"] for doc in documents]
     vectors = [doc["embedding"] for doc in documents]
-    titles = [doc["title"] for doc in documents]
 
     if not vectors:
         raise HTTPException(status_code=500, detail="No vectors found in the documents.")
@@ -132,53 +123,48 @@ async def generate_lesson_plan(request: LessonPlanRequest):
     index = faiss.IndexFlatL2(dimension)
     index.add(np.array(vectors).astype("float32"))
 
-    query_vector = embeddings.embed_query(query)
+    course_materials = []
 
-    D, I = index.search(np.array([query_vector]).astype("float32"), k=5)
-    results = [texts[i] for i in I[0]]
-    references = [titles[i] for i in I[0]]
+    for topic in topics:
+        query_vector = embeddings.embed_query(topic)
+        D, I = index.search(np.array([query_vector]).astype("float32"), k=5)
+        results = [texts[i] for i in I[0]]
+        course_materials.extend(results)
 
-    detailed_descriptions = []
-    for result in results:
-        detailed_descriptions.append(requests.post(
-            'https://api.openai.com/v1/chat/completions',
-            headers={
-                'Authorization': f'Bearer {os.getenv("OPENAI_API_KEY")}',
-                'Content-Type': 'application/json'
-            },
-            json={
-                'model': 'gpt-4',
-                'messages': [
-                    {'role': 'system', 'content': 'You are a helpful assistant.'},
-                    {'role': 'user', 'content': f'Provide a detailed explanation and additional information about the following topic: {result}'}
-                ],
-                'max_tokens': 1024,
-                'temperature': 0.7
-            }
-        ).json()['choices'][0]['message']['content'])
+    if not course_materials:
+        raise HTTPException(status_code=500, detail="No relevant materials found for the course.")
 
-    openai_response = requests.post(
+    # Формируем текстовый промпт для GPT-4
+    prompt = f"Создайте структурированный курс по теме '{topics[0]}' с теорией, примерами задач и их решением на основе следующих материалов:\n"
+    for material in course_materials:
+        prompt += f"{material}\n\n"
+
+    # Отправка запроса к GPT-4
+    response = requests.post(
         'https://api.openai.com/v1/chat/completions',
         headers={
             'Authorization': f'Bearer {os.getenv("OPENAI_API_KEY")}',
             'Content-Type': 'application/json'
         },
         json={
-            'model': 'gpt-4',
-            'messages': [
-                {'role': 'system', 'content': 'You are a helpful assistant.'},
-                {'role': 'user', 'content': f'Create a detailed KTP (knowledge transfer plan) for one week on the subject of {topic} with a focus on the theme of {subtopic}. The KTP should be divided into two sessions, each focusing on developing understanding of {subtopic}. Each session should be tailored to the given duration: {session1_duration} minutes for the first session and {session2_duration} minutes for the second session. Each session should include multiple segments with varying durations that sum up to the total session time. Provide a detailed breakdown of each segment including theme, duration, and description. Use the following references: {", ".join(references)}. Format the response as follows: Session 1: Theme: [theme] Duration: [duration] minutes Description: [description] Methodology: [methodology] ... Session 2: Theme: [theme] Duration: [duration] minutes Description: [description] Methodology: [methodology] ... References: [reference]'}
+            "model": "gpt-4",
+            "messages": [
+                {"role": "system", "content": "You are a helpful assistant."},
+                {"role": "user", "content": prompt}
             ],
-            'max_tokens': 2048,
-            'temperature': 0.7
+            "max_tokens": 2048,
+            "temperature": 0.7,
         }
     )
 
-    if openai_response.status_code != 200:
-        raise HTTPException(status_code=500, detail="Failed to generate lesson plan")
+    gpt_response = response.json()
 
-    ktp_content = openai_response.json()['choices'][0]['message']['content']
-    return {"lesson_plan": ktp_content, "references": references, "detailed_descriptions": detailed_descriptions}
+    if 'choices' in gpt_response and len(gpt_response['choices']) > 0:
+        course_content = gpt_response['choices'][0]['message']['content']
+    else:
+        raise HTTPException(status_code=500, detail="Failed to generate course content.")
+
+    return {"course_content": course_content}
 
 if __name__ == "__main__":
     import uvicorn

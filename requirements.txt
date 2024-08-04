@@ -9,3 +9,4 @@ langchain-community
 faiss-cpu
 requests
 langchain-openai
+pypdf
