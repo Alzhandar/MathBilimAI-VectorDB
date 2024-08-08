@@ -135,7 +135,7 @@ async def create_course(request: CourseRequest):
         raise HTTPException(status_code=500, detail="No relevant materials found for the course.")
 
     # Формируем текстовый промпт для GPT-4
-    prompt = f"Создайте структурированный курс по теме '{topics[0]}' с теорией, примерами задач и их решением на основе следующих материалов:\n"
+    prompt = f"Создайте структурированный курс по теме '{topics[0]}' с теорией на высшим казакским языком , примерами задач и их решением на основе следующих материалов:\n"
     for material in course_materials:
         prompt += f"{material}\n\n"
 
